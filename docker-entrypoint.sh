@@ -13,5 +13,5 @@ if [ "$DEBUG" == 1 ]; then
     exec poetry run python src/manage.py runserver 0.0.0.0:8000
 else
     echo "Запуск сервера в режиме продакшена"
-    exec poetry run gunicorn --bind 0.0.0.0:8000 settings.wsgi:application
+    exec poetry run gunicorn --bind 0.0.0.0:8000 cryptomarket.wsgi:application
 fi
