@@ -4,6 +4,7 @@ from rest_framework.exceptions import PermissionDenied
 class IsAdmin(BasePermission):
     def has_permission(self, request, view):
         print(request.user.is_authenticated, request.user.role)
+        print(request.data)
         if request.user.is_authenticated and request.user.role == "ADMIN":
             return True
         raise PermissionDenied({
