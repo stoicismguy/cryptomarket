@@ -13,5 +13,6 @@ if [ "$DEBUG" == 1 ]; then
     exec poetry run python cryptomarket/manage.py runserver 0.0.0.0:8000
 else
     echo "Запуск сервера в режиме продакшена"
+    cd cryptomarket/
     exec poetry run gunicorn --bind 0.0.0.0:8000 cryptomarket.wsgi:application
 fi
