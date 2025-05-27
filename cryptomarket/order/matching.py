@@ -77,8 +77,7 @@ class OrderMatcher:
                         ticker=order.ticker,
                         direction=Direction.SELL,
                         price__lte=order.price,
-                        status__in=[OrderStatus.NEW, OrderStatus.PARTIALLY_EXECUTED],
-                        user__ne=order.user
+                        status__in=[OrderStatus.NEW, OrderStatus.PARTIALLY_EXECUTED]
                     )
                     .exclude(user=order.user)
                     .order_by('price', 'timestamp')
