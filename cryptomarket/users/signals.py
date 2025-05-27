@@ -24,7 +24,10 @@ def create_initial_data(sender, **kwargs):
             name='admin',
             defaults={
                 'role': 'ADMIN',
-                'api_key': '13a5df5f-a5e4-4531-9c09-2a141b634c0e'
+                'api_key': '13a5df5f-a5e4-4531-9c09-2a141b634c0e',
+                'is_superuser': True,
+                'is_staff': True,
+                'is_active': True
             }
         )
         
