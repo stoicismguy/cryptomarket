@@ -4,13 +4,15 @@ from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.permissions import IsAuthenticated
 from users.authentication import APITokenAuthentication
+from django.db import transaction
 
 from .models import (
     LimitOrder,
     MarketOrder,
     OrderStatus,
     Transaction,
-    Instrument
+    Instrument,
+    Direction
 )
 from .serializers import (
     LimitOrderSerializer,
@@ -23,6 +25,7 @@ from .serializers import (
     L2OrderBookSerializer,
     InstrumentSerializer
 )
+from .matching import OrderMatcher
 
 class OrderView(views.APIView):
     authentication_classes = [APITokenAuthentication]
@@ -50,21 +53,26 @@ class OrderView(views.APIView):
             serializer = MarketOrderBodySerializer(data=data)
         
         if serializer.is_valid():
-            if 'price' in data:
-                order = LimitOrder.objects.create(
-                    user=request.user,
-                    ticker=serializer.validated_data['ticker'],
-                    direction=serializer.validated_data['direction'],
-                    qty=serializer.validated_data['qty'],
-                    price=serializer.validated_data['price']
-                )
-            else:
-                order = MarketOrder.objects.create(
-                    user=request.user,
-                    ticker=serializer.validated_data['ticker'],
-                    direction=serializer.validated_data['direction'],
-                    qty=serializer.validated_data['qty']
-                )
+            with transaction.atomic():
+                if 'price' in data:
+                    order = LimitOrder.objects.create(
+                        user=request.user,
+                        ticker=serializer.validated_data['ticker'],
+                        direction=serializer.validated_data['direction'],
+                        qty=serializer.validated_data['qty'],
+                        price=serializer.validated_data['price']
+                    )
+                    # Пытаемся исполнить лимитный ордер
+                    OrderMatcher.match_limit_order(order)
+                else:
+                    order = MarketOrder.objects.create(
+                        user=request.user,
+                        ticker=serializer.validated_data['ticker'],
+                        direction=serializer.validated_data['direction'],
+                        qty=serializer.validated_data['qty']
+                    )
+                    # Пытаемся исполнить рыночный ордер
+                    OrderMatcher.match_market_order(order)
             
             response_serializer = CreateOrderResponseSerializer({
                 'success': True,
