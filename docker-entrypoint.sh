@@ -5,6 +5,8 @@ poetry install
 
 poetry run python cryptomarket/manage.py migrate
 
+poetry run python cryptomarket/manage.py collectstatic --noinput
+
 echo "SUKA PYTHON"
 
 echo $DEBUG
