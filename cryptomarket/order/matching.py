@@ -48,6 +48,8 @@ class OrderMatcher:
             order.status = OrderStatus.EXECUTED
         elif order.filled > 0:
             order.status = OrderStatus.PARTIALLY_EXECUTED
+        elif order.filled == 0:
+            order.status = OrderStatus.NEW
         order.save()
 
     @staticmethod
@@ -77,7 +79,7 @@ class OrderMatcher:
                     status__in=[OrderStatus.NEW, OrderStatus.PARTIALLY_EXECUTED]
                 )
                 .exclude(user=order.user)
-                .order_by('price', 'timestamp')
+                .order_by('price', 'timestamp')  # Сначала самые дешевые ордера на продажу
             )
         else:
             matching_orders = (
@@ -89,7 +91,7 @@ class OrderMatcher:
                     status__in=[OrderStatus.NEW, OrderStatus.PARTIALLY_EXECUTED]
                 )
                 .exclude(user=order.user)
-                .order_by('-price', 'timestamp')
+                .order_by('-price', 'timestamp')  # Сначала самые дорогие ордера на покупку
             )
 
         for matching_order in matching_orders:
@@ -121,6 +123,11 @@ class OrderMatcher:
                 cls._update_order_status(matching_order, match_qty)
                 
                 remaining_qty -= match_qty
+
+        # Если ордер не исполнен полностью, отменяем его
+        if remaining_qty == order.qty:
+            order.status = OrderStatus.CANCELLED
+            order.save()
 
         return transactions
 
