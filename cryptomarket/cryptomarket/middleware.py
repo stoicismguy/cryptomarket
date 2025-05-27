@@ -30,7 +30,7 @@ class APILoggingMiddleware:
                     body = request.body.decode('utf-8')
 
             # Логируем запрос
-            logger.info(f"REQUEST: {request.path} - {json.dumps(body, ensure_ascii=False) if body else 'No body'}")
+            logger.info(f"{request.method} {request.path} - {json.dumps(body, ensure_ascii=False) if body else 'No body'}")
 
         response = self.get_response(request)
         return response 
