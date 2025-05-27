@@ -12,7 +12,7 @@ class OrderMatcher:
         """Обновляет балансы участников сделки"""
         with transaction.atomic():
             # Списываем деньги у покупателя
-            Balance.objects.filter(user=buyer, ticker='USD').update(
+            Balance.objects.filter(user=buyer, ticker='RUB').update(
                 amount=F('amount') - (price * amount)
             )
             # Начисляем токены покупателю
@@ -25,7 +25,7 @@ class OrderMatcher:
                 amount=F('amount') - amount
             )
             # Начисляем деньги продавцу
-            Balance.objects.filter(user=seller, ticker='USD').update(
+            Balance.objects.filter(user=seller, ticker='RUB').update(
                 amount=F('amount') + (price * amount)
             )
 
@@ -55,8 +55,8 @@ class OrderMatcher:
     @staticmethod
     def _check_balance(user, ticker: str, amount: int, price: Optional[int] = None):
         """Проверяет достаточно ли средств для совершения сделки"""
-        if price:  # Для покупателя проверяем USD
-            balance = Balance.objects.filter(user=user, ticker='USD').first()
+        if price:  # Для покупателя проверяем RUB
+            balance = Balance.objects.filter(user=user, ticker='RUB').first()
             return balance and balance.amount >= price * amount
         else:  # Для продавца проверяем токены
             balance = Balance.objects.filter(user=user, ticker=ticker).first()
@@ -68,46 +68,59 @@ class OrderMatcher:
         transactions = []
         remaining_qty = order.qty
 
-        # Ищем встречные ордера
-        if order.direction == Direction.BUY:
-            matching_orders = (
-                LimitOrder.objects
-                .filter(
-                    ticker=order.ticker,
-                    direction=Direction.SELL,
-                    price__lte=order.price,
-                    status__in=[OrderStatus.NEW, OrderStatus.PARTIALLY_EXECUTED]
+        while remaining_qty > 0:
+            # Ищем лучший встречный ордер
+            if order.direction == Direction.BUY:
+                matching_order = (
+                    LimitOrder.objects
+                    .filter(
+                        ticker=order.ticker,
+                        direction=Direction.SELL,
+                        price__lte=order.price,
+                        status__in=[OrderStatus.NEW, OrderStatus.PARTIALLY_EXECUTED],
+                        user__ne=order.user
+                    )
+                    .exclude(user=order.user)
+                    .order_by('price', 'timestamp')
+                    .first()
                 )
-                .exclude(user=order.user)
-                .order_by('price', 'timestamp')  # Сначала самые дешевые ордера на продажу
-            )
-        else:
-            matching_orders = (
-                LimitOrder.objects
-                .filter(
-                    ticker=order.ticker,
-                    direction=Direction.BUY,
-                    price__gte=order.price,
-                    status__in=[OrderStatus.NEW, OrderStatus.PARTIALLY_EXECUTED]
+            else:
+                matching_order = (
+                    LimitOrder.objects
+                    .filter(
+                        ticker=order.ticker,
+                        direction=Direction.BUY,
+                        price__gte=order.price,
+                        status__in=[OrderStatus.NEW, OrderStatus.PARTIALLY_EXECUTED]
+                    )
+                    .exclude(user=order.user)
+                    .order_by('-price', 'timestamp')
+                    .first()
                 )
-                .exclude(user=order.user)
-                .order_by('-price', 'timestamp')  # Сначала самые дорогие ордера на покупку
-            )
 
-        for matching_order in matching_orders:
-            if remaining_qty <= 0:
+            if not matching_order:
+                # Нет подходящих ордеров - отменяем остаток
+                if order.filled == 0:
+                    order.status = OrderStatus.CANCELLED
+                elif order.filled < order.qty:
+                    order.status = OrderStatus.PARTIALLY_EXECUTED
+                order.save()
                 break
 
             # Определяем количество и цену для сделки
             match_qty = min(remaining_qty, matching_order.qty - matching_order.filled)
-            match_price = matching_order.price
+            match_price = matching_order.price if order.direction == Direction.BUY else order.price
 
-            # Проверяем балансы обеих сторон
+            # Определяем покупателя и продавца
             buyer = order.user if order.direction == Direction.BUY else matching_order.user
             seller = matching_order.user if order.direction == Direction.BUY else order.user
 
-            if not cls._check_balance(buyer, 'USD', match_qty, match_price) or \
+            # Проверяем балансы
+            if not cls._check_balance(buyer, 'RUB', match_qty, match_price) or \
                not cls._check_balance(seller, order.ticker, match_qty):
+                # Если недостаточно средств - пропускаем этот ордер
+                matching_order.status = OrderStatus.CANCELLED
+                matching_order.save()
                 continue
 
             with transaction.atomic():
@@ -119,15 +132,24 @@ class OrderMatcher:
                 transactions.append(tx)
                 
                 # Обновляем статусы ордеров
-                cls._update_order_status(order, match_qty)
-                cls._update_order_status(matching_order, match_qty)
+                order.filled += match_qty
+                matching_order.filled += match_qty
+                
+                # Обновляем статусы
+                if order.filled >= order.qty:
+                    order.status = OrderStatus.EXECUTED
+                else:
+                    order.status = OrderStatus.PARTIALLY_EXECUTED
+                
+                if matching_order.filled >= matching_order.qty:
+                    matching_order.status = OrderStatus.EXECUTED
+                else:
+                    matching_order.status = OrderStatus.PARTIALLY_EXECUTED
+                
+                order.save()
+                matching_order.save()
                 
                 remaining_qty -= match_qty
-
-        # Если ордер не исполнен полностью, отменяем его
-        if remaining_qty == order.qty:
-            order.status = OrderStatus.CANCELLED
-            order.save()
 
         return transactions
 
@@ -137,32 +159,37 @@ class OrderMatcher:
         transactions = []
         remaining_qty = order.qty
 
-        # Ищем встречные лимитные ордера
-        if order.direction == Direction.BUY:
-            matching_orders = (
-                LimitOrder.objects
-                .filter(
-                    ticker=order.ticker,
-                    direction=Direction.SELL,
-                    status__in=[OrderStatus.NEW, OrderStatus.PARTIALLY_EXECUTED]
+        while remaining_qty > 0:
+            # Ищем лучший встречный ордер
+            if order.direction == Direction.BUY:
+                matching_order = (
+                    LimitOrder.objects
+                    .filter(
+                        ticker=order.ticker,
+                        direction=Direction.SELL,
+                        status__in=[OrderStatus.NEW, OrderStatus.PARTIALLY_EXECUTED]
+                    )
+                    .exclude(user=order.user)
+                    .order_by('price', 'timestamp')
+                    .first()
                 )
-                .exclude(user=order.user)
-                .order_by('price', 'timestamp')
-            )
-        else:
-            matching_orders = (
-                LimitOrder.objects
-                .filter(
-                    ticker=order.ticker,
-                    direction=Direction.BUY,
-                    status__in=[OrderStatus.NEW, OrderStatus.PARTIALLY_EXECUTED]
+            else:
+                matching_order = (
+                    LimitOrder.objects
+                    .filter(
+                        ticker=order.ticker,
+                        direction=Direction.BUY,
+                        status__in=[OrderStatus.NEW, OrderStatus.PARTIALLY_EXECUTED]
+                    )
+                    .exclude(user=order.user)
+                    .order_by('-price', 'timestamp')
+                    .first()
                 )
-                .exclude(user=order.user)
-                .order_by('-price', 'timestamp')
-            )
 
-        for matching_order in matching_orders:
-            if remaining_qty <= 0:
+            if not matching_order:
+                # Нет подходящих ордеров - отменяем весь ордер
+                order.status = OrderStatus.CANCELLED
+                order.save()
                 break
 
             match_qty = min(remaining_qty, matching_order.qty - matching_order.filled)
@@ -171,21 +198,34 @@ class OrderMatcher:
             buyer = order.user if order.direction == Direction.BUY else matching_order.user
             seller = matching_order.user if order.direction == Direction.BUY else order.user
 
-            if not cls._check_balance(buyer, 'USD', match_qty, match_price) or \
+            if not cls._check_balance(buyer, 'RUB', match_qty, match_price) or \
                not cls._check_balance(seller, order.ticker, match_qty):
+                # Если недостаточно средств - пропускаем этот ордер
+                matching_order.status = OrderStatus.CANCELLED
+                matching_order.save()
                 continue
 
             with transaction.atomic():
                 cls._update_balances(buyer, seller, order.ticker, match_qty, match_price)
                 tx = cls._create_transaction(buyer, seller, order.ticker, match_qty, match_price)
                 transactions.append(tx)
-                cls._update_order_status(order, match_qty)
-                cls._update_order_status(matching_order, match_qty)
+                
+                order.filled += match_qty
+                matching_order.filled += match_qty
+                
+                if order.filled >= order.qty:
+                    order.status = OrderStatus.EXECUTED
+                else:
+                    order.status = OrderStatus.PARTIALLY_EXECUTED
+                
+                if matching_order.filled >= matching_order.qty:
+                    matching_order.status = OrderStatus.EXECUTED
+                else:
+                    matching_order.status = OrderStatus.PARTIALLY_EXECUTED
+                
+                order.save()
+                matching_order.save()
+                
                 remaining_qty -= match_qty
 
-        # Если ордер не исполнен полностью, отменяем его
-        if remaining_qty == order.qty:
-            order.status = OrderStatus.CANCELLED
-            order.save()
-        
         return transactions 
