@@ -178,21 +178,30 @@ LOGGING = {
                 'CRITICAL': 'red,bg_white',
             },
         },
+        'simple': {
+            'format': '%(asctime)s - %(message)s'
+        }
     },
     'handlers': {
         'console': {
             'class': 'logging.StreamHandler',
             'formatter': 'colored',
         },
+        'file': {
+            'class': 'logging.FileHandler',
+            'filename': BASE_DIR / 'logs' / 'api_requests.log',
+            'formatter': 'simple',
+            'mode': 'a',
+        }
     },
     'loggers': {
         'api_requests': {
-            'handlers': ['console'],
+            'handlers': ['console', 'file'],
             'level': 'INFO',
             'propagate': False,
         },
         'django.request': {
-            'handlers': ['console'],
+            'handlers': ['console', 'file'],
             'level': 'ERROR',
             'propagate': False,
         },
