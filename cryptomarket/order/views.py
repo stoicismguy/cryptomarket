@@ -6,7 +6,7 @@ from rest_framework.permissions import IsAuthenticated
 from users.authentication import APITokenAuthentication
 from django.db import transaction
 from balance.models import Balance
-from typing import Optional
+from typing import Optional, Tuple
 
 from .models import (
     LimitOrder,
@@ -43,20 +43,24 @@ class OrderView(views.APIView):
         
         return Response(limit_serializer.data + market_serializer.data)
     
-    def _check_initial_balance(self, user, ticker: str, qty: int, price: Optional[int] = None, direction: Direction = None):
-        """Проверяет начальный баланс перед созданием ордера"""
-        if direction == Direction.BUY:
+    def _check_initial_balance(self, user, ticker: str, qty: int, price: Optional[int] = None, direction: Direction = None) -> Tuple[bool, str]:
+        """
+        Проверяет начальный баланс перед созданием ордера
+        Возвращает (True, '') если баланс достаточен, (False, error_message) если недостаточен
+        """
+        if direction == Direction.BUY and price:
             # Для покупки проверяем RUB
             balance = Balance.objects.filter(user=user, ticker='RUB').first()
-            required_amount = price * qty if price else 0  # Для рыночного ордера проверим позже
-            if price and (not balance or balance.amount < required_amount):
-                raise ValueError("Insufficient RUB balance for buy order")
+            required_amount = price * qty
+            if not balance or balance.amount < required_amount:
+                return False, f"Insufficient RUB balance. Required: {required_amount}, Available: {balance.amount if balance else 0}"
         elif direction == Direction.SELL:
             # Для продажи проверяем токены
             balance = Balance.objects.filter(user=user, ticker=ticker).first()
             if not balance or balance.amount < qty:
-                raise ValueError(f"Insufficient {ticker} balance for sell order")
-    
+                return False, f"Insufficient {ticker} balance. Required: {qty}, Available: {balance.amount if balance else 0}"
+        return True, ''
+
     def post(self, request):
         """Create a new order"""
         data = request.data
@@ -77,7 +81,11 @@ class OrderView(views.APIView):
                     price = serializer.validated_data.get('price')
 
                     # Проверяем начальный баланс
-                    self._check_initial_balance(request.user, ticker, qty, price, direction)
+                    is_balance_sufficient, error_message = self._check_initial_balance(
+                        request.user, ticker, qty, price, direction
+                    )
+                    if not is_balance_sufficient:
+                        return Response({"detail": error_message}, status=status.HTTP_400_BAD_REQUEST)
 
                     # Проверяем существование встречных ордеров для рыночного ордера
                     if not price:  # Рыночный ордер
@@ -88,7 +96,10 @@ class OrderView(views.APIView):
                         ).exclude(user=request.user)
 
                         if not matching_orders.exists():
-                            raise ValueError("No matching orders available")
+                            return Response(
+                                {"detail": "No matching orders available"},
+                                status=status.HTTP_400_BAD_REQUEST
+                            )
 
                     if 'price' in data:
                         order = LimitOrder.objects.create(
@@ -114,17 +125,18 @@ class OrderView(views.APIView):
                     if isinstance(order, MarketOrder) and not transactions:
                         order.status = OrderStatus.CANCELLED
                         order.save()
-                        raise ValueError("Could not execute market order")
+                        return Response(
+                            {"detail": "Could not execute market order"},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
             
                     response_serializer = CreateOrderResponseSerializer({
                         'success': True,
                         'order_id': order.id
                     })
                     return Response(response_serializer.data, status=status.HTTP_200_OK)
-            except ValueError as e:
-                return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
             except Exception as e:
-                return Response({"detail": "Error processing order"}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         
         return Response(serializer.errors, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
