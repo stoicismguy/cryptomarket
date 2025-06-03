@@ -195,6 +195,44 @@ class OrderMatcher:
         
         try:
             with transaction.atomic():
+                # Для рыночного ордера на покупку нам нужно сначала проверить,
+                # есть ли вообще подходящие ордера и хватит ли денег по худшей цене
+                if order.direction == Direction.BUY:
+                    # Находим все подходящие ордера на продажу
+                    matching_orders = (
+                        LimitOrder.objects
+                        .filter(
+                            ticker=order.ticker,
+                            direction=Direction.SELL,
+                            status__in=[OrderStatus.NEW, OrderStatus.PARTIALLY_EXECUTED]
+                        )
+                        .exclude(user=order.user)
+                        .order_by('price', 'timestamp')
+                    )
+                    
+                    # Проверяем, достаточно ли ордеров для исполнения
+                    available_qty = sum(o.qty - o.filled for o in matching_orders)
+                    if available_qty < order.qty:
+                        order.status = OrderStatus.CANCELLED
+                        order.save()
+                        return transactions
+                    
+                    # Вычисляем необходимую сумму RUB для исполнения
+                    required_rub = 0
+                    remaining = order.qty
+                    for o in matching_orders:
+                        match_qty = min(remaining, o.qty - o.filled)
+                        required_rub += match_qty * o.price
+                        remaining -= match_qty
+                        if remaining <= 0:
+                            break
+                    
+                    # Проверяем баланс RUB
+                    if not cls._check_balance(order.user, 'RUB', order.qty, required_rub // order.qty):
+                        order.status = OrderStatus.CANCELLED
+                        order.save()
+                        return transactions
+
                 remaining_qty = order.qty
 
                 while remaining_qty > 0:
@@ -241,33 +279,37 @@ class OrderMatcher:
                     buyer = order.user if order.direction == Direction.BUY else matching_order.user
                     seller = matching_order.user if order.direction == Direction.BUY else order.user
 
-                    if not cls._check_balance(buyer, 'RUB', match_qty, match_price) or \
-                       not cls._check_balance(seller, order.ticker, match_qty):
+                    try:
+                        # Проверяем балансы и обновляем их
+                        cls._update_balances(buyer, seller, order.ticker, match_qty, match_price)
+                        
+                        # Создаем транзакцию
+                        tx = cls._create_transaction(buyer, seller, order.ticker, match_qty, match_price)
+                        transactions.append(tx)
+
+                        # Обновляем статусы
+                        order.filled += match_qty
+                        matching_order.filled += match_qty
+
+                        if order.filled >= order.qty:
+                            order.status = OrderStatus.EXECUTED
+                        else:
+                            order.status = OrderStatus.PARTIALLY_EXECUTED
+
+                        if matching_order.filled >= matching_order.qty:
+                            matching_order.status = OrderStatus.EXECUTED
+                        else:
+                            matching_order.status = OrderStatus.PARTIALLY_EXECUTED
+
+                        order.save()
+                        matching_order.save()
+
+                        remaining_qty -= match_qty
+                    except ValueError:
+                        # Если не хватает средств, отменяем встречный ордер и продолжаем
                         matching_order.status = OrderStatus.CANCELLED
                         matching_order.save()
                         continue
-
-                    cls._update_balances(buyer, seller, order.ticker, match_qty, match_price)
-                    tx = cls._create_transaction(buyer, seller, order.ticker, match_qty, match_price)
-                    transactions.append(tx)
-
-                    order.filled += match_qty
-                    matching_order.filled += match_qty
-
-                    if order.filled >= order.qty:
-                        order.status = OrderStatus.EXECUTED
-                    else:
-                        order.status = OrderStatus.PARTIALLY_EXECUTED
-
-                    if matching_order.filled >= matching_order.qty:
-                        matching_order.status = OrderStatus.EXECUTED
-                    else:
-                        matching_order.status = OrderStatus.PARTIALLY_EXECUTED
-
-                    order.save()
-                    matching_order.save()
-
-                    remaining_qty -= match_qty
 
         except Exception as e:
             print(f"Error during order matching: {e}")

@@ -5,6 +5,8 @@ from rest_framework.decorators import api_view, permission_classes, authenticati
 from rest_framework.permissions import IsAuthenticated
 from users.authentication import APITokenAuthentication
 from django.db import transaction
+from balance.models import Balance
+from typing import Optional
 
 from .models import (
     LimitOrder,
@@ -41,6 +43,19 @@ class OrderView(views.APIView):
         
         return Response(limit_serializer.data + market_serializer.data)
     
+    def _check_initial_balance(self, user, ticker: str, qty: int, price: Optional[int] = None, direction: Direction = None):
+        """Проверяет начальный баланс перед созданием ордера"""
+        if direction == Direction.BUY and price:
+            # Для покупки проверяем RUB
+            balance = Balance.objects.filter(user=user, ticker='RUB').first()
+            if not balance or balance.amount < price * qty:
+                raise ValueError("Insufficient RUB balance for buy order")
+        elif direction == Direction.SELL:
+            # Для продажи проверяем токены
+            balance = Balance.objects.filter(user=user, ticker=ticker).first()
+            if not balance or balance.amount < qty:
+                raise ValueError(f"Insufficient {ticker} balance for sell order")
+    
     def post(self, request):
         """Create a new order"""
         data = request.data
@@ -53,32 +68,51 @@ class OrderView(views.APIView):
             serializer = MarketOrderBodySerializer(data=data)
         
         if serializer.is_valid():
-            with transaction.atomic():
-                if 'price' in data:
-                    order = LimitOrder.objects.create(
-                        user=request.user,
-                        ticker=serializer.validated_data['ticker'],
-                        direction=serializer.validated_data['direction'],
-                        qty=serializer.validated_data['qty'],
-                        price=serializer.validated_data['price']
-                    )
-                    # Пытаемся исполнить лимитный ордер
-                    OrderMatcher.match_limit_order(order)
-                else:
-                    order = MarketOrder.objects.create(
-                        user=request.user,
-                        ticker=serializer.validated_data['ticker'],
-                        direction=serializer.validated_data['direction'],
-                        qty=serializer.validated_data['qty']
-                    )
-                    # Пытаемся исполнить рыночный ордер
-                    OrderMatcher.match_market_order(order)
+            try:
+                with transaction.atomic():
+                    ticker = serializer.validated_data['ticker']
+                    direction = serializer.validated_data['direction']
+                    qty = serializer.validated_data['qty']
+                    price = serializer.validated_data.get('price')
+
+                    # Проверяем начальный баланс
+                    self._check_initial_balance(request.user, ticker, qty, price, direction)
+
+                    if 'price' in data:
+                        order = LimitOrder.objects.create(
+                            user=request.user,
+                            ticker=ticker,
+                            direction=direction,
+                            qty=qty,
+                            price=price
+                        )
+                        # Пытаемся исполнить лимитный ордер
+                        transactions = OrderMatcher.match_limit_order(order)
+                    else:
+                        order = MarketOrder.objects.create(
+                            user=request.user,
+                            ticker=ticker,
+                            direction=direction,
+                            qty=qty
+                        )
+                        # Пытаемся исполнить рыночный ордер
+                        transactions = OrderMatcher.match_market_order(order)
+
+                    # Проверяем результат исполнения
+                    if isinstance(order, MarketOrder) and not transactions:
+                        order.status = OrderStatus.CANCELLED
+                        order.save()
+                        raise ValueError("No matching orders available for market order")
             
-            response_serializer = CreateOrderResponseSerializer({
-                'success': True,
-                'order_id': order.id
-            })
-            return Response(response_serializer.data, status=status.HTTP_200_OK)
+                    response_serializer = CreateOrderResponseSerializer({
+                        'success': True,
+                        'order_id': order.id
+                    })
+                    return Response(response_serializer.data, status=status.HTTP_200_OK)
+            except ValueError as e:
+                return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            except Exception as e:
+                return Response({"detail": "Error processing order"}, status=status.HTTP_400_BAD_REQUEST)
         
         return Response(serializer.errors, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
