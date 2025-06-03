@@ -50,7 +50,7 @@ def create_initial_data(sender, **kwargs):
         balance, created = Balance.objects.get_or_create(
             user=admin,
             ticker='RUB',
-            defaults={'amount': 999999999999999999}  # Начальный баланс 1,000,000 RUB
+            amount=99999999999999,
         )
         
         if created:

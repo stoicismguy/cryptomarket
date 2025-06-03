@@ -5,6 +5,7 @@ from rest_framework.decorators import api_view, permission_classes, authenticati
 from rest_framework.permissions import IsAuthenticated
 from users.models import User, UserRole
 from users.authentication import APITokenAuthentication
+from order.models import Instrument
 from cryptomarket.permissions import IsAdmin
 
 from .models import Balance
@@ -22,9 +23,20 @@ class BalanceView(views.APIView):
     
     def get(self, request):
         """Получить баланс авторизованного пользователя"""
-        balances = Balance.objects.filter(user=request.user)
-        serializer = BalanceResponseSerializer(balances)
-        return Response(serializer.data)
+        # Получаем все существующие тикеры
+        all_tickers = Instrument.objects.values_list('ticker', flat=True)
+        
+        # Получаем балансы пользователя
+        user_balances = Balance.objects.filter(user=request.user)
+        
+        # Создаем словарь с нулевыми балансами для всех тикеров
+        balance_dict = {ticker: 0 for ticker in all_tickers}
+        
+        # Обновляем словарь реальными значениями балансов
+        for balance in user_balances:
+            balance_dict[balance.ticker] = balance.amount
+            
+        return Response(balance_dict)
 
 class AdminBalanceDepositView(views.APIView):
     """API для пополнения баланса (только для админов)"""
