@@ -169,7 +169,7 @@ LOGGING = {
     'formatters': {
         'colored': {
             '()': 'colorlog.ColoredFormatter',
-            'format': '%(log_color)s%(levelname)-8s%(reset)s %(blue)s%(asctime)s%(reset)s %(message)s',
+            'format': '%(log_color)s%(asctime)s - %(message)s%(reset)s',
             'log_colors': {
                 'DEBUG':    'cyan',
                 'INFO':     'green',
@@ -184,30 +184,16 @@ LOGGING = {
             'class': 'logging.StreamHandler',
             'formatter': 'colored',
         },
-        'file': {
-            'class': 'logging.FileHandler',
-            'filename': 'django.log',
-            'formatter': 'colored',
-        },
     },
     'loggers': {
-        '': {  # Корневой логгер
-            'handlers': ['console', 'file'],
-            'level': 'INFO',
-        },
-        'django': {
-            'handlers': ['console', 'file'],
+        'api_requests': {
+            'handlers': ['console'],
             'level': 'INFO',
             'propagate': False,
         },
         'django.request': {
-            'handlers': ['console', 'file'],
+            'handlers': ['console'],
             'level': 'ERROR',
-            'propagate': False,
-        },
-        'api_requests': {
-            'handlers': ['console', 'file'],
-            'level': 'INFO',
             'propagate': False,
         },
     },

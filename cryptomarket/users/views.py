@@ -15,6 +15,10 @@ class RegisterView(APIView):
     def post(self, request):
         serializer = NewUserSerializer(data=request.data)
         if serializer.is_valid():
+            if User.objects.filter(name=serializer.validated_data["name"]).exists():
+                return Response(
+                    {"detail": "User already exists"}, status=status.HTTP_422_UNPROCESSABLE_ENTITY
+                )
             user = User.objects.create_user(
                 name=serializer.validated_data["name"],
                 password=None
