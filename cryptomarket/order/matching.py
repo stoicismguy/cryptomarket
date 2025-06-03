@@ -195,10 +195,8 @@ class OrderMatcher:
         
         try:
             with transaction.atomic():
-                # Для рыночного ордера на покупку нам нужно сначала проверить,
-                # есть ли вообще подходящие ордера и хватит ли денег по худшей цене
+                # Проверяем наличие встречных ордеров
                 if order.direction == Direction.BUY:
-                    # Находим все подходящие ордера на продажу
                     matching_orders = (
                         LimitOrder.objects
                         .filter(
@@ -209,15 +207,27 @@ class OrderMatcher:
                         .exclude(user=order.user)
                         .order_by('price', 'timestamp')
                     )
-                    
-                    # Проверяем, достаточно ли ордеров для исполнения
-                    available_qty = sum(o.qty - o.filled for o in matching_orders)
-                    if available_qty < order.qty:
-                        order.status = OrderStatus.CANCELLED
-                        order.save()
-                        return transactions
-                    
-                    # Вычисляем необходимую сумму RUB для исполнения
+                else:  # SELL
+                    matching_orders = (
+                        LimitOrder.objects
+                        .filter(
+                            ticker=order.ticker,
+                            direction=Direction.BUY,
+                            status__in=[OrderStatus.NEW, OrderStatus.PARTIALLY_EXECUTED]
+                        )
+                        .exclude(user=order.user)
+                        .order_by('-price', 'timestamp')
+                    )
+
+                # Проверяем, достаточно ли ордеров для исполнения
+                available_qty = sum(o.qty - o.filled for o in matching_orders)
+                if available_qty < order.qty:
+                    order.status = OrderStatus.CANCELLED
+                    order.save()
+                    return transactions
+
+                if order.direction == Direction.BUY:
+                    # Вычисляем необходимую сумму RUB для покупки
                     required_rub = 0
                     remaining = order.qty
                     for o in matching_orders:
@@ -229,6 +239,12 @@ class OrderMatcher:
                     
                     # Проверяем баланс RUB
                     if not cls._check_balance(order.user, 'RUB', order.qty, required_rub // order.qty):
+                        order.status = OrderStatus.CANCELLED
+                        order.save()
+                        return transactions
+                else:  # SELL
+                    # Проверяем баланс токенов для продажи
+                    if not cls._check_balance(order.user, order.ticker, order.qty):
                         order.status = OrderStatus.CANCELLED
                         order.save()
                         return transactions

@@ -45,10 +45,11 @@ class OrderView(views.APIView):
     
     def _check_initial_balance(self, user, ticker: str, qty: int, price: Optional[int] = None, direction: Direction = None):
         """Проверяет начальный баланс перед созданием ордера"""
-        if direction == Direction.BUY and price:
+        if direction == Direction.BUY:
             # Для покупки проверяем RUB
             balance = Balance.objects.filter(user=user, ticker='RUB').first()
-            if not balance or balance.amount < price * qty:
+            required_amount = price * qty if price else 0  # Для рыночного ордера проверим позже
+            if price and (not balance or balance.amount < required_amount):
                 raise ValueError("Insufficient RUB balance for buy order")
         elif direction == Direction.SELL:
             # Для продажи проверяем токены
@@ -78,6 +79,17 @@ class OrderView(views.APIView):
                     # Проверяем начальный баланс
                     self._check_initial_balance(request.user, ticker, qty, price, direction)
 
+                    # Проверяем существование встречных ордеров для рыночного ордера
+                    if not price:  # Рыночный ордер
+                        matching_orders = LimitOrder.objects.filter(
+                            ticker=ticker,
+                            direction=Direction.SELL if direction == Direction.BUY else Direction.BUY,
+                            status__in=[OrderStatus.NEW, OrderStatus.PARTIALLY_EXECUTED]
+                        ).exclude(user=request.user)
+
+                        if not matching_orders.exists():
+                            raise ValueError("No matching orders available")
+
                     if 'price' in data:
                         order = LimitOrder.objects.create(
                             user=request.user,
@@ -102,7 +114,7 @@ class OrderView(views.APIView):
                     if isinstance(order, MarketOrder) and not transactions:
                         order.status = OrderStatus.CANCELLED
                         order.save()
-                        raise ValueError("No matching orders available for market order")
+                        raise ValueError("Could not execute market order")
             
                     response_serializer = CreateOrderResponseSerializer({
                         'success': True,
