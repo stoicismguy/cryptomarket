@@ -1,4 +1,4 @@
-from django.db.models.signals import post_migrate
+from django.db.models.signals import post_migrate, post_save
 from django.dispatch import receiver
 from django.db import transaction
 import uuid
@@ -46,5 +46,24 @@ def create_initial_data(sender, **kwargs):
             }
         )
         
+        # Создаем начальный баланс RUB для админа
+        balance, created = Balance.objects.get_or_create(
+            user=admin,
+            ticker='RUB',
+            defaults={'amount': 999999999999999999}  # Начальный баланс 1,000,000 RUB
+        )
+        
         if created:
-            print('Created initial admin balance') 
+            print('Created initial admin balance')
+
+@receiver(post_save, sender=User)
+def create_user_balance(sender, instance, created, **kwargs):
+    """
+    Создает начальный баланс RUB для нового пользователя
+    """
+    if created:  # Только для новых пользователей
+        Balance.objects.get_or_create(
+            user=instance,
+            ticker='RUB',
+            defaults={'amount': 0}  # Начальный баланс 0 RUB
+        ) 
