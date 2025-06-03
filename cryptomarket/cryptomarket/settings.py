@@ -189,7 +189,7 @@ LOGGING = {
         },
         'file': {
             'class': 'logging.FileHandler',
-            'filename': BASE_DIR / 'logs' / 'api_requests.log',
+            'filename': 'api_requests.log',
             'formatter': 'simple',
             'mode': 'a',
         }
