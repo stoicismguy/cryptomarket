@@ -11,23 +11,27 @@ class OrderMatcher:
     def _update_balances(buyer, seller, ticker: str, amount: int, price: int):
         """Обновляет балансы участников сделки"""
         with transaction.atomic():
-            # Списываем деньги у покупателя
-            Balance.objects.filter(user=buyer, ticker='RUB').update(
-                amount=F('amount') - (price * amount)
-            )
-            # Начисляем токены покупателю
-            Balance.objects.filter(user=buyer, ticker=ticker).update(
-                amount=F('amount') + amount
-            )
-            
-            # Списываем токены у продавца
-            Balance.objects.filter(user=seller, ticker=ticker).update(
-                amount=F('amount') - amount
-            )
-            # Начисляем деньги продавцу
-            Balance.objects.filter(user=seller, ticker='RUB').update(
-                amount=F('amount') + (price * amount)
-            )
+            # Создаем или получаем балансы, если их нет
+            buyer_rub, _ = Balance.objects.get_or_create(user=buyer, ticker='RUB', defaults={'amount': 0})
+            buyer_token, _ = Balance.objects.get_or_create(user=buyer, ticker=ticker, defaults={'amount': 0})
+            seller_rub, _ = Balance.objects.get_or_create(user=seller, ticker='RUB', defaults={'amount': 0})
+            seller_token, _ = Balance.objects.get_or_create(user=seller, ticker=ticker, defaults={'amount': 0})
+
+            # Проверяем достаточность средств
+            if buyer_rub.amount < price * amount or seller_token.amount < amount:
+                raise ValueError("Insufficient funds")
+
+            # Обновляем балансы
+            buyer_rub.amount -= price * amount
+            buyer_token.amount += amount
+            seller_rub.amount += price * amount
+            seller_token.amount -= amount
+
+            # Сохраняем изменения
+            buyer_rub.save()
+            buyer_token.save()
+            seller_rub.save()
+            seller_token.save()
 
     @staticmethod
     def _create_transaction(buyer, seller, ticker: str, amount: int, price: int) -> Transaction:
@@ -55,12 +59,13 @@ class OrderMatcher:
     @staticmethod
     def _check_balance(user, ticker: str, amount: int, price: Optional[int] = None):
         """Проверяет достаточно ли средств для совершения сделки"""
-        if price:  # Для покупателя проверяем RUB
-            balance = Balance.objects.filter(user=user, ticker='RUB').first()
-            return balance and balance.amount >= price * amount
-        else:  # Для продавца проверяем токены
-            balance = Balance.objects.filter(user=user, ticker=ticker).first()
-            return balance and balance.amount >= amount
+        with transaction.atomic():
+            if price:  # Для покупателя проверяем RUB
+                balance, _ = Balance.objects.get_or_create(user=user, ticker='RUB', defaults={'amount': 0})
+                return balance.amount >= price * amount
+            else:  # Для продавца проверяем токены
+                balance, _ = Balance.objects.get_or_create(user=user, ticker=ticker, defaults={'amount': 0})
+                return balance.amount >= amount
 
     @classmethod
     def match_limit_order(cls, order: LimitOrder) -> List[Transaction]:

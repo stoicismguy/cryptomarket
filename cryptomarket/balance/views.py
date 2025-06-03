@@ -26,15 +26,19 @@ class BalanceView(views.APIView):
         # Получаем все существующие тикеры
         all_tickers = Instrument.objects.values_list('ticker', flat=True)
         
+        # Создаем балансы для всех тикеров, если их нет
+        for ticker in all_tickers:
+            Balance.objects.get_or_create(
+                user=request.user,
+                ticker=ticker,
+                defaults={'amount': 0}
+            )
+        
         # Получаем балансы пользователя
         user_balances = Balance.objects.filter(user=request.user)
         
-        # Создаем словарь с нулевыми балансами для всех тикеров
-        balance_dict = {ticker: 0 for ticker in all_tickers}
-        
-        # Обновляем словарь реальными значениями балансов
-        for balance in user_balances:
-            balance_dict[balance.ticker] = balance.amount
+        # Создаем словарь с балансами
+        balance_dict = {balance.ticker: balance.amount for balance in user_balances}
             
         return Response(balance_dict)
 

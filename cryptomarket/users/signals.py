@@ -45,6 +45,16 @@ def create_initial_data(sender, **kwargs):
                 'name': 'Russian Ruble'
             }
         )
+        
+        # Создаем начальный баланс RUB для админа
+        balance, created = Balance.objects.get_or_create(
+            user=admin,
+            ticker='RUB',
+            defaults={'amount': 1000000}  # Начальный баланс 1,000,000 RUB
+        )
+        
+        if created:
+            print('Created initial admin balance')
 
 @receiver(post_save, sender=User)
 def create_user_balance(sender, instance, created, **kwargs):
@@ -57,3 +67,4 @@ def create_user_balance(sender, instance, created, **kwargs):
             ticker='RUB',
             defaults={'amount': 0}  # Начальный баланс 0 RUB
         ) 
+        print('Created initial user balance')
