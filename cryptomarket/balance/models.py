@@ -12,6 +12,9 @@ class Balance(models.Model):
     class Meta:
         db_table = "balances"
         unique_together = ['user', 'ticker']
+        indexes = [
+            models.Index(fields=['user']),
+        ]
         
     def __str__(self):
         return f"{self.user.name}: {self.ticker} - {self.amount}"
