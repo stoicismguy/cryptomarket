@@ -45,6 +45,10 @@ class LimitOrder(Order):
     
     class Meta:
         db_table = "limit_orders"
+        indexes = [
+            models.Index(fields=['ticker', 'direction', 'status', 'price', 'timestamp']),
+            models.Index(fields=['user']),
+        ]
 
 class MarketOrder(Order):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="market_orders")
@@ -54,6 +58,9 @@ class MarketOrder(Order):
     
     class Meta:
         db_table = "market_orders"
+        indexes = [
+            models.Index(fields=['user']),
+        ]
 
 class Transaction(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -69,3 +76,8 @@ class Transaction(models.Model):
     
     class Meta:
         db_table = "transactions"
+        indexes = [
+            models.Index(fields=['buyer']),
+            models.Index(fields=['seller']),
+            models.Index(fields=['ticker', 'timestamp']),
+        ]
