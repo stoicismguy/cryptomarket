@@ -27,12 +27,12 @@ class BalanceView(views.APIView):
         all_tickers = Instrument.objects.values_list('ticker', flat=True)
         
         # Создаем балансы для всех тикеров, если их нет
-        for ticker in all_tickers:
-            Balance.objects.get_or_create(
-                user=request.user,
-                ticker=ticker,
-                defaults={'amount': 0}
-            )
+        # for ticker in all_tickers:
+        #     Balance.objects.get_or_create(
+        #         user=request.user,
+        #         ticker=ticker,
+        #         defaults={'amount': 0}
+        #     )
         
         # Получаем балансы пользователя
         user_balances = Balance.objects.filter(user=request.user)
